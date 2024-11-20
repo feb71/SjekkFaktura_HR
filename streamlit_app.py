@@ -34,39 +34,45 @@ def get_invoice_number(file):
 
 
 # Funksjon for å lese PDF-filen og hente ut relevante data
+# Funksjon for å lese PDF-filen og hente ut relevante data
 def extract_data_from_pdf(file, doc_type, invoice_number=None):
     try:
-        with pdfplumber.open(file) as pdf:
+        with fitz.open(stream=file.read(), filetype="pdf") as pdf:
             data = []
             start_reading = False
 
-            for page in pdf.pages:
-                text = page.extract_text()
+            for page_num in range(len(pdf)):
+                page = pdf.load_page(page_num)
+                text = page.get_text()
+
                 if text is None:
-                    st.error(f"Ingen tekst funnet på side {page.page_number} i PDF-filen.")
+                    st.error(f"Ingen tekst funnet på side {page_num + 1} i PDF-filen.")
                     continue
+                
+                # Debug: Vis tekst som er hentet ut fra PDF-en for denne siden
+                st.write(f"Tekst fra side {page_num + 1}:")
+                st.write(text)
                 
                 lines = text.split('\n')
                 for line in lines:
-                    # Start å lese når vi finner artikkelnummerlinjen
-                    if "Art.Nr." in line and "Beskrivelse" in line:
+                    # Sjekk om vi har funnet starten av dataseksjonen basert på nøkkelordene i overskriften
+                    if any(keyword in line for keyword in ["Art.Nr.", "Beskrivelse", "Ant.", "E.", "Pris", "Beløp"]):
                         start_reading = True
                         continue
 
                     if start_reading:
-                        columns = line.split()
-                        # Sjekk at linjen har minst 6 kolonner og at første kolonne er et 7-sifret tall
-                        if len(columns) >= 6 and re.match(r"\d{7}", columns[0]):
-                            item_number = columns[0]
-                            description = " ".join(columns[1:-4])
-                            try:
-                                quantity = float(columns[-4].replace('.', '').replace(',', '.'))
-                                unit_price = float(columns[-3].replace('.', '').replace(',', '.'))
-                                discount = float(columns[-2].replace('.', '').replace(',', '.')) if '%' in columns[-2] else 0
-                                total_price = float(columns[-1].replace('.', '').replace(',', '.'))
-                            except ValueError as e:
-                                st.error(f"Kunne ikke konvertere til flyttall: {e}")
-                                continue
+                        # Debug: Vis linjene som blir analysert for å forstå om de har riktig format
+                        st.write(f"Linje analysert: {line}")
+
+                        # Bruk regulært uttrykk for å fange opp alle deler av linjen
+                        match = re.match(r"(\d{7})\s+(.+?)\s+(\d{1,3}(?:\.\d{3})*,\d{2})\s+(\w+)\s+(\d{1,3}(?:\.\d{3})*,\d{2})\s+(\d{1,3}(?:\.\d{3})*,\d{2})", line)
+                        if match:
+                            item_number = match.group(1)
+                            description = match.group(2).strip()
+                            quantity = float(match.group(3).replace('.', '').replace(',', '.'))
+                            unit = match.group(4)
+                            unit_price = float(match.group(5).replace('.', '').replace(',', '.'))
+                            total_price = float(match.group(6).replace('.', '').replace(',', '.'))
 
                             unique_id = f"{invoice_number}_{item_number}" if invoice_number else item_number
                             data.append({
@@ -74,8 +80,8 @@ def extract_data_from_pdf(file, doc_type, invoice_number=None):
                                 "Varenummer": item_number,
                                 "Beskrivelse_Faktura": description,
                                 "Antall_Faktura": quantity,
+                                "Enhet_Faktura": unit,
                                 "Enhetspris_Faktura": unit_price,
-                                "Rabatt": discount,
                                 "Beløp_Faktura": total_price,
                                 "Type": doc_type
                             })
