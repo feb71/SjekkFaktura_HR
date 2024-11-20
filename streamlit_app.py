@@ -7,18 +7,30 @@ from io import BytesIO
 st.set_page_config(page_title="Sammenlign Faktura mot Tilbud", layout="wide", initial_sidebar_state="expanded")
 
 # Funksjon for å lese fakturanummer fra PDF
+# Funksjon for å lese fakturanummer fra PDF
 def get_invoice_number(file):
     try:
-        with pdfplumber.open(file) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text()
-                match = re.search(r"Fakturanummer\s*[:\-]?\s*(\d+)", text, re.IGNORECASE)
-                if match:
-                    return match.group(1)
+        with fitz.open(stream=file.read(), filetype="pdf") as pdf:
+            for page_num in range(len(pdf)):
+                page = pdf.load_page(page_num)
+                text = page.get_text()
+
+                if text:
+                    # Prøv et mer spesifikt søk for å finne fakturanummeret
+                    match = re.search(r"Faktura(?:nummer)?[:\s]*\b(\d{6,})\b", text, re.IGNORECASE)
+                    if match:
+                        return match.group(1)
+                    
+                    # Prøv et annet søk med andre ord rundt fakturanummeret
+                    match_alt = re.search(r"Fakturadato.*Faktura(?:nummer)?[:\s]*\b(\d{6,})\b", text, re.IGNORECASE)
+                    if match_alt:
+                        return match_alt.group(1)
+
         return None
     except Exception as e:
         st.error(f"Kunne ikke lese fakturanummer fra PDF: {e}")
         return None
+
 
 # Funksjon for å lese PDF-filen og hente ut relevante data
 def extract_data_from_pdf(file, doc_type, invoice_number=None):
