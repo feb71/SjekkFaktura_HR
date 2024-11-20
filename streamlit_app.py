@@ -26,6 +26,7 @@ def get_invoice_number(file_buffer):
         return None
 
 # Funksjon for å lese PDF-filen og hente ut relevante data
+# Funksjon for å lese PDF-filen og hente ut relevante data
 def extract_data_from_pdf(file_buffer, doc_type, invoice_number=None):
     try:
         with fitz.open(stream=file_buffer, filetype="pdf") as pdf:
@@ -56,7 +57,8 @@ def extract_data_from_pdf(file_buffer, doc_type, invoice_number=None):
                         st.write(f"Linje analysert: {line}")
 
                         # Bruk regulært uttrykk for å fange opp alle deler av linjen
-                        match = re.match(r"(\d{7})\s+(.+?)\s+(\d+(?:[.,]\d+)?)\s+(\w+)\s+(\d+(?:[.,]\d+)?)\s+(\d+(?:[.,]\d+)?)", line)
+                        # Justert for variabelt antall mellomrom og fleksibilitet
+                        match = re.match(r"(\d{7})\s+(.+?)\s+(\d+(?:[.,]\d+)?)\s+([a-zA-Z]+)\s+(\d+(?:[.,]\d+)?)\s+(\d+(?:[.,]\d+)?)", line)
                         if match:
                             item_number = match.group(1)
                             description = match.group(2).strip()
@@ -79,11 +81,14 @@ def extract_data_from_pdf(file_buffer, doc_type, invoice_number=None):
 
             if len(data) == 0:
                 st.error("Ingen data ble funnet i PDF-filen.")
+            else:
+                st.success(f"{len(data)} varer funnet i PDF-filen.")
                 
             return pd.DataFrame(data)
     except Exception as e:
         st.error(f"Kunne ikke lese data fra PDF: {e}")
         return pd.DataFrame()
+
 
 # Hovedfunksjon for Streamlit-appen
 def main():
