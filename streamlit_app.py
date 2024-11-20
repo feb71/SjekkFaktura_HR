@@ -1,4 +1,4 @@
-import streamlit as st
+import streamlit as st 
 import pdfplumber
 import pandas as pd
 import re
@@ -35,29 +35,22 @@ def extract_data_from_pdf(file, doc_type, invoice_number=None):
                 
                 lines = text.split('\n')
                 for line in lines:
-                    if doc_type == "Faktura" and "Artikkel" in line:
+                    # Start å lese når vi finner artikkelnummerlinjen
+                    if "Art.Nr." in line and "Beskrivelse" in line:
                         start_reading = True
                         continue
 
                     if start_reading:
                         columns = line.split()
-                        if len(columns) >= 5:
-                            item_number = columns[1]
-                            if not item_number.isdigit():
-                                continue
-
-                            description = " ".join(columns[2:-4])
+                        # Sjekk at linjen har minst 6 kolonner og at første kolonne er et 7-sifret tall
+                        if len(columns) >= 6 and re.match(r"\d{7}", columns[0]):
+                            item_number = columns[0]
+                            description = " ".join(columns[1:-4])
                             try:
-                                antall_fra_beskrivelse = re.search(r'(\d+)\s*$', description)
-                                if antall_fra_beskrivelse:
-                                    quantity = float(antall_fra_beskrivelse.group(1).replace('.', '').replace(',', '.'))
-                                    description = re.sub(r'\s*\d+\s*$', '', description)
-                                else:
-                                    quantity = float(columns[-4].replace('.', '').replace(',', '.')) if columns[-4].replace('.', '').replace(',', '').isdigit() else columns[-4]
-                                
-                                unit_price = float(columns[-3].replace('.', '').replace(',', '.')) if columns[-3].replace('.', '').replace(',', '').isdigit() else columns[-3]
-                                discount = float(columns[-2].replace('.', '').replace(',', '.')) if columns[-2].replace('.', '').replace(',', '').isdigit() else 0  # Sett rabatt til 0 hvis tom
-                                total_price = float(columns[-1].replace('.', '').replace(',', '.')) if columns[-1].replace('.', '').replace(',', '').isdigit() else columns[-1]
+                                quantity = float(columns[-4].replace('.', '').replace(',', '.'))
+                                unit_price = float(columns[-3].replace('.', '').replace(',', '.'))
+                                discount = float(columns[-2].replace('.', '').replace(',', '.')) if '%' in columns[-2] else 0
+                                total_price = float(columns[-1].replace('.', '').replace(',', '.'))
                             except ValueError as e:
                                 st.error(f"Kunne ikke konvertere til flyttall: {e}")
                                 continue
@@ -73,6 +66,7 @@ def extract_data_from_pdf(file, doc_type, invoice_number=None):
                                 "Beløp_Faktura": total_price,
                                 "Type": doc_type
                             })
+
             if len(data) == 0:
                 st.error("Ingen data ble funnet i PDF-filen.")
                 
@@ -99,8 +93,8 @@ def main():
 
     with col1:
         st.header("Last opp filer")
-        invoice_file = st.file_uploader("Last opp faktura fra Brødrene Dahl", type="pdf")
-        offer_file = st.file_uploader("Last opp tilbud fra Brødrene Dahl (Excel)", type="xlsx")
+        invoice_file = st.file_uploader("Last opp faktura fra Heidenreich", type="pdf")
+        offer_file = st.file_uploader("Last opp tilbud fra Heidenreich (Excel)", type="xlsx")
 
     if invoice_file and offer_file:
         # Hent fakturanummer
@@ -145,18 +139,6 @@ def main():
                 merged_data["Antall_Tilbud"] = pd.to_numeric(merged_data["Antall_Tilbud"], errors='coerce')
                 merged_data["Enhetspris_Faktura"] = pd.to_numeric(merged_data["Enhetspris_Faktura"], errors='coerce')
                 merged_data["Enhetspris_Tilbud"] = pd.to_numeric(merged_data["Enhetspris_Tilbud"], errors='coerce')
-
-                # Etter at vi har samlet dataene og opprettet merged_data, kan vi legge til en sjekk for å flytte verdiene
-                merged_data["Enhetspris_Faktura"] = merged_data.apply(
-                    lambda row: row["Rabatt"] if pd.isna(row["Enhetspris_Faktura"]) and not pd.isna(row["Rabatt"]) else row["Enhetspris_Faktura"],
-                    axis=1
-                )
-
-                # Fjern verdiene fra rabattkolonnen der de er flyttet
-                merged_data["Rabatt"] = merged_data.apply(
-                    lambda row: None if row["Enhetspris_Faktura"] == row["Rabatt"] else row["Rabatt"],
-                    axis=1
-                )
 
                 # Finne avvik
                 merged_data["Avvik_Antall"] = merged_data["Antall_Faktura"] - merged_data["Antall_Tilbud"]
