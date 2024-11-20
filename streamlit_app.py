@@ -25,12 +25,13 @@ def get_invoice_number(file_buffer):
         st.error(f"Kunne ikke lese fakturanummer fra PDF: {e}")
         return None
 # Funksjon for å lese PDF-filen og hente ut relevante data
+# Funksjon for å lese PDF-filen og hente ut relevante data
 def extract_data_from_pdf(file_buffer, doc_type, invoice_number=None):
     try:
         with fitz.open(stream=file_buffer, filetype="pdf") as pdf:
             data = []
-            start_reading = False
             current_item = {}
+            start_reading = False
 
             for page_num in range(len(pdf)):
                 page = pdf.load_page(page_num)
@@ -46,6 +47,10 @@ def extract_data_from_pdf(file_buffer, doc_type, invoice_number=None):
                 
                 lines = text.split('\n')
                 for line in lines:
+                    line = line.strip()  # Fjern leading og trailing whitespace
+                    if not line:
+                        continue  # Hopp over tomme linjer
+                    
                     # Start å lese når vi finner en linje som inneholder nøkkelordene for kolonneoverskriftene
                     if any(keyword in line for keyword in ["Art.Nr.", "Beskrivelse", "Ant.", "E.", "Pris", "Beløp"]):
                         start_reading = True
@@ -53,24 +58,26 @@ def extract_data_from_pdf(file_buffer, doc_type, invoice_number=None):
 
                     if start_reading:
                         # Debug: Vis linjene som blir analysert for å forstå om de har riktig format
-                        st.write(f"Linje analysert: {line.strip()}")
+                        st.write(f"Linje analysert: {line}")
 
-                        # Sjekk om linjen inneholder et varenummer (7 sifre)
-                        if re.match(r"^\d{7}$", line.strip()):
-                            if current_item:
-                                # Hvis vi allerede har en vare under oppbygging, lagre den før vi starter på en ny
-                                if all(key in current_item for key in ["Varenummer", "Beskrivelse", "Antall", "Enhet", "Enhetspris", "Beløp"]):
-                                    data.append(current_item)
+                        # Sjekk om linjen inneholder varenummer (7 sifre)
+                        if re.match(r"^\d{7}$", line):
+                            # Hvis vi har pågående varelinje, lagre den først
+                            if current_item and all(key in current_item for key in ["Varenummer", "Beskrivelse", "Antall", "Enhet", "Enhetspris", "Beløp"]):
+                                data.append(current_item)
                                 current_item = {}
-                            current_item["Varenummer"] = line.strip()
-                        
-                        # Sjekk om linjen inneholder beskrivelsen
-                        elif "Beskrivelse" not in current_item:
-                            current_item["Beskrivelse"] = line.strip()
-                        
-                        # Sjekk om linjen inneholder kvantitet, enhet, enhetspris eller totalpris
-                        else:
-                            match = re.match(r"(\d+(?:[.,]\d+)?)\s+(\w+)\s+(\d+(?:[.,]\d+)?)\s+(\d+(?:[.,]\d+)?)", line)
+
+                            # Start ny varelinje
+                            current_item["Varenummer"] = line
+
+                        # Hvis vi allerede har et varenummer, men ikke beskrivelse
+                        elif "Varenummer" in current_item and "Beskrivelse" not in current_item:
+                            current_item["Beskrivelse"] = line
+
+                        # Hvis vi allerede har beskrivelse, les mengde, enhet, enhetspris og beløp
+                        elif "Beskrivelse" in current_item:
+                            # Prøv å finne antall, enhet, enhetspris og beløp i linjen
+                            match = re.match(r"(\d+(?:[.,]\d+)?)\s+([a-zA-Z]+)\s+(\d+(?:[.,]\d+)?)\s+(\d+(?:[.,]\d+)?)", line)
                             if match:
                                 current_item["Antall"] = float(match.group(1).replace(',', '.'))
                                 current_item["Enhet"] = match.group(2)
