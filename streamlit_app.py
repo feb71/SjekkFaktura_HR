@@ -24,14 +24,13 @@ def get_invoice_number(file_buffer):
     except Exception as e:
         st.error(f"Kunne ikke lese fakturanummer fra PDF: {e}")
         return None
-
-# Funksjon for å lese PDF-filen og hente ut relevante data
 # Funksjon for å lese PDF-filen og hente ut relevante data
 def extract_data_from_pdf(file_buffer, doc_type, invoice_number=None):
     try:
         with fitz.open(stream=file_buffer, filetype="pdf") as pdf:
             data = []
             start_reading = False
+            current_item = {}
 
             for page_num in range(len(pdf)):
                 page = pdf.load_page(page_num)
@@ -54,36 +53,40 @@ def extract_data_from_pdf(file_buffer, doc_type, invoice_number=None):
 
                     if start_reading:
                         # Debug: Vis linjene som blir analysert for å forstå om de har riktig format
-                        st.write(f"Linje analysert: {line}")
+                        st.write(f"Linje analysert: {line.strip()}")
 
-                        # Bruk regulært uttrykk for å fange opp alle deler av linjen
-                        # Justert for variabelt antall mellomrom og fleksibilitet
-                        match = re.match(r"(\d{7})\s+(.+?)\s+(\d+(?:[.,]\d+)?)\s+([a-zA-Z]+)\s+(\d+(?:[.,]\d+)?)\s+(\d+(?:[.,]\d+)?)", line)
-                        if match:
-                            item_number = match.group(1)
-                            description = match.group(2).strip()
-                            quantity = float(match.group(3).replace(',', '.'))
-                            unit = match.group(4)
-                            unit_price = float(match.group(5).replace(',', '.'))
-                            total_price = float(match.group(6).replace(',', '.'))
+                        # Sjekk om linjen inneholder et varenummer (7 sifre)
+                        if re.match(r"^\d{7}$", line.strip()):
+                            if current_item:
+                                # Hvis vi allerede har en vare under oppbygging, lagre den før vi starter på en ny
+                                if all(key in current_item for key in ["Varenummer", "Beskrivelse", "Antall", "Enhet", "Enhetspris", "Beløp"]):
+                                    data.append(current_item)
+                                current_item = {}
+                            current_item["Varenummer"] = line.strip()
+                        
+                        # Sjekk om linjen inneholder beskrivelsen
+                        elif "Beskrivelse" not in current_item:
+                            current_item["Beskrivelse"] = line.strip()
+                        
+                        # Sjekk om linjen inneholder kvantitet, enhet, enhetspris eller totalpris
+                        else:
+                            match = re.match(r"(\d+(?:[.,]\d+)?)\s+(\w+)\s+(\d+(?:[.,]\d+)?)\s+(\d+(?:[.,]\d+)?)", line)
+                            if match:
+                                current_item["Antall"] = float(match.group(1).replace(',', '.'))
+                                current_item["Enhet"] = match.group(2)
+                                current_item["Enhetspris"] = float(match.group(3).replace(',', '.'))
+                                current_item["Beløp"] = float(match.group(4).replace(',', '.'))
 
-                            unique_id = f"{invoice_number}_{item_number}" if invoice_number else item_number
-                            data.append({
-                                "UnikID": unique_id,
-                                "Varenummer": item_number,
-                                "Beskrivelse_Faktura": description,
-                                "Antall_Faktura": quantity,
-                                "Enhet_Faktura": unit,
-                                "Enhetspris_Faktura": unit_price,
-                                "Beløp_Faktura": total_price,
-                                "Type": doc_type
-                            })
+            # Legg til siste element hvis det finnes
+            if current_item and all(key in current_item for key in ["Varenummer", "Beskrivelse", "Antall", "Enhet", "Enhetspris", "Beløp"]):
+                data.append(current_item)
 
             if len(data) == 0:
                 st.error("Ingen data ble funnet i PDF-filen.")
             else:
                 st.success(f"{len(data)} varer funnet i PDF-filen.")
                 
+            # Konverter dataene til en DataFrame for videre prosessering
             return pd.DataFrame(data)
     except Exception as e:
         st.error(f"Kunne ikke lese data fra PDF: {e}")
