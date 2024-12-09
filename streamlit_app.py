@@ -80,8 +80,8 @@ def main():
 
     with col1:
         st.header("Last opp filer")
-        invoice_files = st.file_uploader("Last opp fakturaer fra Brødrene Dahl", type="pdf", accept_multiple_files=True)
-        offer_file = st.file_uploader("Last opp tilbud fra Brødrene Dahl (Excel)", type="xlsx")
+        invoice_files = st.file_uploader("Last opp fakturaer fra Heidenreich", type="pdf", accept_multiple_files=True)
+        offer_file = st.file_uploader("Last opp tilbud fra Heidenreich (Excel)", type="xlsx")
 
     if invoice_files and offer_file:
         with col1:
