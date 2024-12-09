@@ -1,168 +1,149 @@
 import streamlit as st
-import fitz  # PyMuPDF
+import pdfplumber
 import pandas as pd
 import re
 from io import BytesIO
 
-st.set_page_config(page_title="Sammenlign Faktura mot Tilbud", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Streamlit App", layout="wide", initial_sidebar_state="expanded")
 
-# Funksjon for å lese fakturanummer fra PDF
-def get_invoice_number(file_buffer):
+# Funksjon for å sjekke om en verdi er et tall
+def er_tall(verdi):
     try:
-        with fitz.open(stream=file_buffer, filetype="pdf") as pdf:
-            for page_num in range(len(pdf)):
-                page = pdf.load_page(page_num)
-                text = page.get_text()
+        float(verdi.replace(",", "").replace(".", ""))  # Håndterer tall med komma eller punktum
+        return True
+    except ValueError:
+        return False
 
-                if text:
-                    # Prøv et mer spesifikt søk for å finne fakturanummeret
-                    match = re.search(r"Faktura(?:nummer)?[:\s]*\b(\d{6,})\b", text, re.IGNORECASE)
-                    if match:
-                        return match.group(1)
-                    
-        return None
-    except Exception as e:
-        st.error(f"Kunne ikke lese fakturanummer fra PDF: {e}")
-        return None
-# Funksjon for å lese PDF-filen og hente ut relevante data
-# Funksjon for å lese PDF-filen og hente ut relevante data
-def extract_data_from_pdf(file_buffer, doc_type, invoice_number=None):
+# Funksjon for å gjenkjenne VARENR
+def er_gyldig_varenr(linje):
+    parts = linje.split()
+    return len(parts) > 0 and bool(re.match(r"^[A-Za-z0-9]+$", parts[0]))
+
+# Funksjon for å hente fakturanummer
+def hent_fakturanummer(text):
+    match = re.search(r"FAKTURA\s+(\d+)", text, re.IGNORECASE)
+    return match.group(1) if match else None
+
+# Funksjon for å lese PDF og hente data
+def extract_data_from_pdf(file, doc_type):
     try:
-        with fitz.open(stream=file_buffer, filetype="pdf") as pdf:
-            data = []
-            current_item = {}
-            start_reading = False
-
-            for page_num in range(len(pdf)):
-                page = pdf.load_page(page_num)
-                text = page.get_text()
-
-                if text is None:
-                    st.error(f"Ingen tekst funnet på side {page_num + 1} i PDF-filen.")
-                    continue
-                
-                # Debug: Vis tekst som er hentet ut fra PDF-en for denne siden
-                st.write(f"Tekst fra side {page_num + 1}:")
-                st.write(text)
-                
-                lines = text.split('\n')
+        data = []
+        fakturanummer = "Ukjent"  # Standardverdi hvis fakturanummer ikke finnes
+        with pdfplumber.open(file) as pdf:
+            for i, page in enumerate(pdf.pages):
+                text = page.extract_text()
+                if i == 0:
+                    fakturanummer = hent_fakturanummer(text)
+                lines = text.split("\n")
+                current_discount = None
                 for line in lines:
-                    line = line.strip()  # Fjern leading og trailing whitespace
-                    if not line:
-                        continue  # Hopp over tomme linjer
-                    
-                    # Start å lese når vi finner en linje som inneholder nøkkelordene for kolonneoverskriftene
-                    if any(keyword in line for keyword in ["Art.Nr.", "Beskrivelse", "Ant.", "E.", "Pris", "Beløp"]):
-                        start_reading = True
-                        continue
-
-                    if start_reading:
-                        # Debug: Vis linjene som blir analysert for å forstå om de har riktig format
-                        st.write(f"Linje analysert: {line}")
-
-                        # Sjekk om linjen inneholder varenummer (7 sifre)
-                        if re.match(r"^\d{7}$", line):
-                            # Hvis vi har pågående varelinje, lagre den først
-                            if current_item and all(key in current_item for key in ["Varenummer", "Beskrivelse", "Antall", "Enhet", "Enhetspris", "Beløp"]):
-                                data.append(current_item)
-                                current_item = {}
-
-                            # Start ny varelinje
-                            current_item["Varenummer"] = line
-
-                        # Hvis vi allerede har et varenummer, men ikke beskrivelse
-                        elif "Varenummer" in current_item and "Beskrivelse" not in current_item:
-                            current_item["Beskrivelse"] = line
-
-                        # Hvis vi allerede har beskrivelse, les mengde, enhet, enhetspris og beløp
-                        elif "Beskrivelse" in current_item:
-                            # Prøv å finne antall, enhet, enhetspris og beløp i linjen
-                            match = re.match(r"(\d+(?:[.,]\d+)?)\s+([a-zA-Z]+)\s+(\d+(?:[.,]\d+)?)\s+(\d+(?:[.,]\d+)?)", line)
-                            if match:
-                                current_item["Antall"] = float(match.group(1).replace(',', '.'))
-                                current_item["Enhet"] = match.group(2)
-                                current_item["Enhetspris"] = float(match.group(3).replace(',', '.'))
-                                current_item["Beløp"] = float(match.group(4).replace(',', '.'))
-
-            # Legg til siste element hvis det finnes
-            if current_item and all(key in current_item for key in ["Varenummer", "Beskrivelse", "Antall", "Enhet", "Enhetspris", "Beløp"]):
-                data.append(current_item)
-
-            if len(data) == 0:
-                st.error("Ingen data ble funnet i PDF-filen.")
-            else:
-                st.success(f"{len(data)} varer funnet i PDF-filen.")
-                
-            # Konverter dataene til en DataFrame for videre prosessering
-            return pd.DataFrame(data)
+                    if "%" in line:
+                        current_discount = re.search(r"\d+%|\d+,\d+%", line).group(0) if re.search(r"\d+%|\d+,\d+%", line) else None
+                    elif er_gyldig_varenr(line):
+                        parts = line.split()
+                        if len(parts) >= 6:
+                            art_nr = parts[0]
+                            beskrivelse = " ".join(parts[1:-4])
+                            ant = parts[-4]
+                            enhet = parts[-3]
+                            pris = parts[-2]
+                            belop = parts[-1]
+                            if er_tall(ant) and er_tall(pris) and er_tall(belop):
+                                data.append({
+                                    "UnikID": f"{fakturanummer}_{art_nr}",
+                                    "Varenummer": art_nr,
+                                    "Beskrivelse_Faktura": beskrivelse,
+                                    "Antall_Faktura": float(ant.replace(",", ".")),
+                                    "Enhetspris_Faktura": float(pris.replace(",", ".")),
+                                    "Beløp_Faktura": float(belop.replace(",", ".")),
+                                    "Rabatt": current_discount,
+                                    "Fakturanummer": fakturanummer,
+                                    "Type": doc_type
+                                })
+        return pd.DataFrame(data)
     except Exception as e:
         st.error(f"Kunne ikke lese data fra PDF: {e}")
         return pd.DataFrame()
 
+# Funksjon for å konvertere DataFrame til en Excel-fil
+def convert_df_to_excel(df):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False, sheet_name='Sheet1')
+    return output.getvalue()
 
-# Hovedfunksjon for Streamlit-appen
 def main():
     st.title("Sammenlign Faktura mot Tilbud")
     st.markdown("""<style>.dataframe th {font-weight: bold !important;}</style>""", unsafe_allow_html=True)
 
-    # Opprett tre kolonner
     col1, col2, col3 = st.columns([1, 5, 1])
 
     with col1:
         st.header("Last opp filer")
-        invoice_file = st.file_uploader("Last opp faktura fra Heidenreich", type="pdf")
-        offer_file = st.file_uploader("Last opp tilbud fra Heidenreich (Excel)", type="xlsx")
+        invoice_files = st.file_uploader("Last opp fakturaer fra Brødrene Dahl", type="pdf", accept_multiple_files=True)
+        offer_file = st.file_uploader("Last opp tilbud fra Brødrene Dahl (Excel)", type="xlsx")
 
-    if invoice_file and offer_file:
-        # Les hele PDF-filen til en buffer for gjenbruk
-        file_buffer = BytesIO(invoice_file.read())
-
-        # Hent fakturanummer
+    if invoice_files and offer_file:
         with col1:
-            st.info("Henter fakturanummer fra faktura...")
-            invoice_number = get_invoice_number(file_buffer)
+            st.info("Laster inn tilbud fra Excel-filen...")
+        offer_data = pd.read_excel(offer_file)
 
-        if invoice_number:
+        offer_data.rename(columns={
+            'VARENR': 'Varenummer',
+            'BESKRIVELSE': 'Beskrivelse_Tilbud',
+            'ANTALL': 'Antall_Tilbud',
+            'ENHET': 'Enhet_Tilbud',
+            'ENHETSPRIS': 'Enhetspris_Tilbud',
+            'TOTALPRIS': 'Totalt pris'
+        }, inplace=True)
+
+        all_invoice_data = pd.DataFrame()
+
+        for invoice_file in invoice_files:
             with col1:
-                st.success(f"Fakturanummer funnet: {invoice_number}")
-            
-            # Ekstraher data fra PDF-filer ved å bruke bufferen på nytt
-            file_buffer.seek(0)  # Sett tilbake til start av bufferen
-            with col1:
-                st.info("Laster inn faktura...")
-            invoice_data = extract_data_from_pdf(file_buffer, "Faktura", invoice_number)
+                st.info(f"Laster inn faktura: {invoice_file.name}")
+            invoice_data = extract_data_from_pdf(invoice_file, "Faktura")
+            all_invoice_data = pd.concat([all_invoice_data, invoice_data], ignore_index=True)
 
-            # Les tilbudet fra Excel-filen
-            with col1:
-                st.info("Laster inn tilbud fra Excel-filen...")
-            try:
-                offer_data = pd.read_excel(offer_file)
+        if not all_invoice_data.empty and not offer_data.empty:
+            with col2:
+                st.write("Sammenligner data...")
 
-                # Debug: Vis kolonnenavnene som er lest inn
-                st.write("Kolonnenavn i tilbudsfilen:")
-                st.write(offer_data.columns)
+            merged_data = pd.merge(offer_data, all_invoice_data, on="Varenummer", how='outer', suffixes=('_Tilbud', '_Faktura'))
 
-                # Vis de første radene for å sjekke formatet
-                st.write("Første rader i tilbudsfilen:")
-                st.write(offer_data.head())
+            merged_data["Avvik_Antall"] = merged_data["Antall_Faktura"] - merged_data["Antall_Tilbud"]
+            merged_data["Avvik_Enhetspris"] = merged_data["Enhetspris_Faktura"] - merged_data["Enhetspris_Tilbud"]
+            merged_data["Prosentvis_økning"] = ((merged_data["Enhetspris_Faktura"] - merged_data["Enhetspris_Tilbud"]) / merged_data["Enhetspris_Tilbud"]) * 100
 
-                # Riktige kolonnenavn fra Excel-filen for tilbud
-                offer_data.rename(columns={
-                    'VARENR': 'Varenummer',
-                    'BESKRIVELSE': 'Beskrivelse_Tilbud',
-                    'ANTALL': 'Antall_Tilbud',
-                    'ENHET': 'Enhet_Tilbud',
-                    'ENHETSPRIS': 'Enhetspris_Tilbud',
-                    'TOTALPRIS': 'Totalt pris'
-                }, inplace=True)
+            avvik = merged_data[(merged_data["Avvik_Antall"].notna() & (merged_data["Avvik_Antall"] != 0)) |
+                                (merged_data["Avvik_Enhetspris"].notna() & (merged_data["Avvik_Enhetspris"] != 0))]
 
-            except Exception as e:
-                st.error(f"Kunne ikke lese tilbudsdata fra Excel-filen: {e}")
-                offer_data = pd.DataFrame()
+            with col2:
+                st.subheader("Avvik mellom Faktura og Tilbud")
+                st.dataframe(avvik)
 
-            # Resten av sammenligningslogikken kan implementeres her...
+            only_in_invoice = merged_data[merged_data['Enhetspris_Tilbud'].isna()]
+            with col2:
+                st.subheader("Varenummer som finnes i faktura, men ikke i tilbud")
+                st.dataframe(only_in_invoice)
+
+            excel_data = convert_df_to_excel(all_invoice_data)
+
+            with col3:
+                st.download_button(
+                    label="Last ned avviksrapport som Excel",
+                    data=convert_df_to_excel(avvik),
+                    file_name="avvik_rapport.xlsx"
+                )
+                st.download_button(
+                    label="Last ned alle varenummer som Excel",
+                    data=excel_data,
+                    file_name="faktura_varer.xlsx"
+                )
         else:
-            st.error("Fakturanummeret ble ikke funnet i PDF-filen.")
+            st.error("Kunne ikke lese data fra tilbudet eller fakturaene.")
+    else:
+        st.error("Last opp både fakturaer og tilbud.")
 
 if __name__ == "__main__":
     main()
